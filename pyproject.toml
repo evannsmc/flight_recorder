@@ -1,0 +1,19 @@
+# pip install -e .  (outside ROS: the Python writer/reader only; the C++ header is used via CMake/colcon)
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flight_recorder"
+version = "0.1.0"
+description = "Lean, crash-tolerant flight-data logging: preallocated column buffers, one HDF5 file, Python and C++ writers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = ["numpy", "h5py", "pandas"]
+
+[project.scripts]
+flight_recorder = "flight_recorder.__main__:main"
+
+[tool.setuptools]
+packages = ["flight_recorder"]

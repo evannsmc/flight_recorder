@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""ros2 run flight_recorder flight_recorder {info,csv,ros2logger-csv} ..."""
+import sys
+
+from flight_recorder.__main__ import main
+
+sys.exit(main())

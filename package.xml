@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>flight_recorder</name>
+  <version>0.1.0</version>
+  <description>Lean, crash-tolerant flight-data logging for ROS 2 control nodes: preallocated column buffers, one HDF5 file, identical Python and C++ writers, ROS2Logger-compatible API and CSV export.</description>
+  <maintainer email="evannsmcuadrado@gmail.com">evannsmc</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>libhdf5-dev</depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-h5py</exec_depend>
+  <exec_depend>python3-pandas</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
