@@ -77,11 +77,21 @@ class Recorder:
         self._thread = None
         self._created_file = False
         if autosave_period:
-            if not path:
-                raise ValueError('autosave_period needs a path')
-            self._thread = threading.Thread(target=self._autosave, args=(float(autosave_period),),
-                                            name='flight_recorder_autosave', daemon=True)
-            self._thread.start()
+            self.start_autosave(autosave_period)
+
+    def start_autosave(self, period: float, path: Optional[str] = None) -> None:
+        """Flush every ``period`` seconds from a background thread (e.g. once the log path is known)."""
+        if path:
+            if self._created_file and os.path.abspath(path) != os.path.abspath(self.path or ''):
+                raise ValueError(f'already writing {self.path}; a recorder writes one file')
+            self.path = path
+        if not self.path:
+            raise ValueError('autosave needs a path')
+        if self._thread is not None:
+            raise RuntimeError('autosave already running')
+        self._thread = threading.Thread(target=self._autosave, args=(float(period),),
+                                        name='flight_recorder_autosave', daemon=True)
+        self._thread.start()
 
     # ---------------------------------------------------------------------------------------- collecting
     def stream(self, name: str, columns: Iterable[str], capacity: int = 4096) -> ColumnBuffer:

@@ -8,4 +8,4 @@ from .reader import FlightLog
 from .format import FORMAT_NAME, FORMAT_VERSION
 
 __all__ = ['ColumnBuffer', 'Recorder', 'FlightLog', 'record_key', 'git_commit', 'FORMAT_NAME', 'FORMAT_VERSION']
-__version__ = '0.1.0'
+__version__ = '0.1.1'

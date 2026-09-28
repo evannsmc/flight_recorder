@@ -132,3 +132,18 @@ def test_one_recorder_one_file(tmp_path):
     rec.flush()
     with pytest.raises(ValueError, match='one file'):
         rec.flush(str(tmp_path / 'other.h5'))
+
+
+def test_start_autosave_later(tmp_path):
+    """The path may only be known after the streams exist (e.g. a ROS node that learns it after init)."""
+    rec = Recorder()
+    s = rec.stream('s', ['x'])
+    s.append(1.0)
+    path = str(tmp_path / 'later.h5')
+    rec.start_autosave(0.1, path)
+    for i in range(50):
+        s.append(float(i))
+    time.sleep(0.4)
+    with FlightLog(path) as log:
+        assert len(log['s']) == 51
+    rec.save()
