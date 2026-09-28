@@ -1,10 +1,10 @@
 ```text
-/    @ controller='twinflight', created='2026-09-28T17:23:30', format='flight_recorder'
+/    @ controller='twinflight', created='2026-09-28T17:36:11', format='flight_recorder'
      @ format_version=1
      @ gains=[6.0, 4.5, 1.0]
      @ host='example-host'
      @ rate_hz=100.0
-     @ robot='skie_2'
+     @ robot='skydio_x2'
      @ writer='python'
     events/
         detail     str     (3,)       chunks=(256,) resizable

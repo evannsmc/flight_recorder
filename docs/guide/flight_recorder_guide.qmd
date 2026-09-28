@@ -52,7 +52,7 @@ The whole API in three snippets (from the README):
 ```python
 from flight_recorder import Recorder
 
-rec = Recorder('flight.h5', metadata={'robot': 'skie_2'}, autosave_period=5.0)
+rec = Recorder('flight.h5', metadata={'robot': 'skydio_x2'}, autosave_period=5.0)
 ticks = rec.stream('ticks', ['time', 'x', 'y', 'z', 'yaw', 'thrust'])   # once, at init
 
 ticks.append(t, x, y, z, yaw, thrust)                                    # every tick
@@ -65,7 +65,7 @@ rec.save()                                                               # at sh
 ```cpp
 #include <flight_recorder/recorder.hpp>
 
-fr::Recorder rec("flight.h5", {{"robot", std::string("skie_2")}});
+fr::Recorder rec("flight.h5", {{"robot", std::string("skydio_x2")}});
 auto& ticks = rec.stream("ticks", {"time", "x", "y", "z", "yaw", "thrust"});
 ticks.append(t, x, y, z, yaw, thrust);                                   // ~15 ns
 rec.record("plans", seq, {{"tube", fr::Array(tube.data(), {rows, 10})}}, {{"t_start", t}});
@@ -500,7 +500,7 @@ import numpy as np
 from flight_recorder import Recorder, FlightLog
 
 rec = Recorder('synthetic_flight.h5',
-               metadata={'robot': 'skie_2', 'rate_hz': 100.0, 'gains': [6.0, 4.5, 1.0]})
+               metadata={'robot': 'skydio_x2', 'rate_hz': 100.0, 'gains': [6.0, 4.5, 1.0]})
 ticks = rec.stream('ticks', ['time', 'x', 'y', 'z', 'x_ref', 'y_ref', 'z_ref', 'thrust', 'plan_seq'],
                    capacity=6000)
 est = rec.stream('estimator', ['time', 'bias_x', 'bias_y'], capacity=600)

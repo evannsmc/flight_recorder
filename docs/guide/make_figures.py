@@ -146,7 +146,7 @@ def fig_memory_model():
 def synthetic_flight(path: str):
     """A 60 s, 100 Hz synthetic flight written with the real Recorder (incremental flushes + records + events)."""
     rng = np.random.default_rng(7)
-    rec = Recorder(path, metadata={'robot': 'skie_2', 'rate_hz': 100.0, 'gains': [6.0, 4.5, 1.0],
+    rec = Recorder(path, metadata={'robot': 'skydio_x2', 'rate_hz': 100.0, 'gains': [6.0, 4.5, 1.0],
                                    'controller': 'twinflight', 'host': 'example-host'})   # user metadata wins
     ticks = rec.stream('ticks', ['time', 'x', 'y', 'z', 'x_ref', 'y_ref', 'z_ref', 'thrust', 'plan_seq'],
                        capacity=6000)

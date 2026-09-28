@@ -1,6 +1,6 @@
 """Recorder: collect streams, records and events in memory, write them to one HDF5 file.
 
-    rec = Recorder('flight.h5', metadata={'robot': 'skie_2'}, autosave_period=5.0)
+    rec = Recorder('flight.h5', metadata={'robot': 'skydio_x2'}, autosave_period=5.0)
     ticks = rec.stream('ticks', ['time', 'x', 'y', 'z'])      # at init
     ticks.append(t, x, y, z)                                   # hot path, ~1-3 us, no allocation kept
     rec.record('plans', seq, {'tube': tube, 'ref': ref}, {'t_start': t0})   # store once, when it changes

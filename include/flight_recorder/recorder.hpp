@@ -1,7 +1,7 @@
 // flight_recorder (C++ writer): same HDF5 layout as the Python Recorder (flight_recorder/format.py), readable with
 // flight_recorder.FlightLog. Header-only; needs the HDF5 C library (Ubuntu: libhdf5-dev).
 //
-//   fr::Recorder rec("flight.h5", {{"robot", "skie_2"}});
+//   fr::Recorder rec("flight.h5", {{"robot", "skydio_x2"}});
 //   auto& ticks = rec.stream("ticks", {"time", "x", "y", "z"});   // at init
 //   ticks.append(t, x, y, z);                                      // hot path: no allocation (except 1 block / 4096 rows)
 //   rec.record("plans", 12, {{"tube", fr::Array(tube_data, {rows, 10})}}, {{"t_start", 3.2}});

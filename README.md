@@ -6,7 +6,7 @@ format**; a Python reader loads it straight into pandas.
 ```python
 from flight_recorder import Recorder
 
-rec = Recorder('flight.h5', metadata={'robot': 'skie_2'}, autosave_period=5.0)
+rec = Recorder('flight.h5', metadata={'robot': 'skydio_x2'}, autosave_period=5.0)
 ticks = rec.stream('ticks', ['time', 'x', 'y', 'z', 'yaw', 'thrust'])   # once, at init
 
 ticks.append(t, x, y, z, yaw, thrust)                                    # every tick: ~0.5 µs, nothing for the GC
@@ -19,7 +19,7 @@ rec.save()                                                               # at sh
 ```cpp
 #include <flight_recorder/recorder.hpp>
 
-fr::Recorder rec("flight.h5", {{"robot", std::string("skie_2")}});
+fr::Recorder rec("flight.h5", {{"robot", std::string("skydio_x2")}});
 auto& ticks = rec.stream("ticks", {"time", "x", "y", "z", "yaw", "thrust"});
 ticks.append(t, x, y, z, yaw, thrust);                                   // ~15 ns
 rec.record("plans", seq, {{"tube", fr::Array(tube.data(), {rows, 10})}}, {{"t_start", t}});
