@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flight_recorder"
-version = "0.1.1"
+version = "0.1.2"
 description = "Lean, crash-tolerant flight-data logging: preallocated column buffers, one HDF5 file, Python and C++ writers"
 readme = "README.md"
 license = {text = "MIT"}

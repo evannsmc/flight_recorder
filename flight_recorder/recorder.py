@@ -10,15 +10,18 @@
 Writing is incremental: every stream column is a resizable HDF5 dataset, and ``flush()`` appends only the rows added
 since the previous flush. ``save()`` is simply the last flush. With ``autosave_period`` a background thread flushes
 periodically, so a crash loses at most that many seconds of data (ROS2Logger-style loggers lose everything, because
-nothing is written before shutdown).
+nothing is written before shutdown). Records and events are released from memory once they are on disk, and a
+recorder that has written its file gets a final flush at interpreter exit even if ``save()`` is never called.
 """
 from __future__ import annotations
 
+import atexit
 import datetime
 import os
 import socket
 import subprocess
 import threading
+import weakref
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import numpy as np
@@ -45,6 +48,17 @@ def _attr_value(value: Any):
     return str(value)
 
 
+def _final_flush(ref: 'weakref.ref') -> None:
+    """atexit hook: save a still-alive recorder that has a file, so data after the last autosave is not lost."""
+    rec = ref()
+    if rec is None or not rec._created_file:
+        return
+    try:
+        rec.save()
+    except Exception as e:  # never raise from interpreter shutdown
+        print(f'[flight_recorder] final flush at exit failed: {e}')
+
+
 def git_commit(path: str) -> str:
     """Short commit hash of the git repository containing ``path`` ('' if none)."""
     try:
@@ -67,28 +81,33 @@ class Recorder:
         self.metadata.update(metadata or {})
         self._streams: Dict[str, ColumnBuffer] = {}
         self._flushed_rows: Dict[str, int] = {}
+        # pending (not yet flushed) records and events; a successful flush removes what it wrote
         self._records: List[Tuple[str, str, Dict[str, np.ndarray], Dict[str, Any]]] = []
-        self._records_flushed = 0
         self._events: List[Tuple[float, str, str]] = []
-        self._events_flushed = 0
-        self._lock = threading.Lock()          # records / events / stream registry
+        self._lock = threading.Lock()          # records / events / stream registry / metadata
         self._flush_lock = threading.Lock()    # one flush at a time
         self._stop = threading.Event()
         self._thread = None
         self._created_file = False
+        self._atexit_registered = False
         if autosave_period:
             self.start_autosave(autosave_period)
 
     def start_autosave(self, period: float, path: Optional[str] = None) -> None:
-        """Flush every ``period`` seconds from a background thread (e.g. once the log path is known)."""
+        """Flush every ``period`` seconds from a background thread (e.g. once the log path is known).
+
+        May be called again after ``save()`` (e.g. to keep recording into the same file).
+        """
         if path:
+            path = fmt.h5_path(path)
             if self._created_file and os.path.abspath(path) != os.path.abspath(self.path or ''):
                 raise ValueError(f'already writing {self.path}; a recorder writes one file')
             self.path = path
         if not self.path:
             raise ValueError('autosave needs a path')
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             raise RuntimeError('autosave already running')
+        self._stop = threading.Event()  # a previous save() set the old one; a fresh event lets the new thread run
         self._thread = threading.Thread(target=self._autosave, args=(float(period),),
                                         name='flight_recorder_autosave', daemon=True)
         self._thread.start()
@@ -111,18 +130,24 @@ class Recorder:
                copy: bool = False) -> None:
         """Store arrays that change rarely (a plan, a trajectory, a gain matrix) ONCE, under records/<group>/<key>.
 
-        By default the arrays are kept by reference (no copy): pass immutable data, or copy=True.
+        By default the arrays are kept by reference (no copy) until the next flush: pass immutable data, or copy=True.
+        Array names and attribute names share one namespace (both become members of the same HDF5 group).
         """
+        attrs = dict(attrs or {})
+        clash = sorted(set(arrays) & set(attrs))
+        if clash:
+            raise ValueError(f'record {group}/{key}: {clash} used both as array and attribute names')
         arrs = {k: (np.array(v, dtype=float) if copy else np.asarray(v, dtype=float)) for k, v in arrays.items()}
         with self._lock:
-            self._records.append((group, record_key(key), arrs, dict(attrs or {})))
+            self._records.append((group, record_key(key), arrs, attrs))
 
     def event(self, t: float, kind: str, detail: str = '') -> None:
         with self._lock:
             self._events.append((float(t), str(kind), str(detail)))
 
     def set_metadata(self, **values: Any) -> None:
-        self.metadata.update(values)
+        with self._lock:  # flush() snapshots metadata under the same lock (it may run on the autosave thread)
+            self.metadata.update(values)
 
     # ---------------------------------------------------------------------------------------- writing
     def flush(self, path: Optional[str] = None) -> str:
@@ -131,7 +156,7 @@ class Recorder:
         path = path or self.path
         if not path:
             raise ValueError('no path given')
-        path = os.path.splitext(path)[0] + '.h5'
+        path = fmt.h5_path(path)
         if self._created_file and os.path.abspath(path) != os.path.abspath(self.path):
             # later flushes only append the NEW rows at their offsets; a different file would miss the earlier ones
             raise ValueError(f'already writing {self.path}; a recorder writes one file')
@@ -139,21 +164,25 @@ class Recorder:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             with self._lock:
                 streams = list(self._streams.items())
-                records = self._records[self._records_flushed:]
-                events = self._events[self._events_flushed:]
+                records = list(self._records)
+                events = list(self._events)
+                metadata = dict(self.metadata)
             mode = 'a' if self._created_file else 'w'  # the first flush replaces any old file, later ones append
             with h5py.File(path, mode) as f:
                 self._created_file = True
-                for k, v in self.metadata.items():
+                for k, v in metadata.items():
                     if v is not None:
                         f.attrs[k] = _attr_value(v)
                 self._flush_streams(f, streams)
                 self._flush_records(f, records)
                 self._flush_events(f, events)
-            with self._lock:
-                self._records_flushed += len(records)
-                self._events_flushed += len(events)
-        self.path = path
+            with self._lock:  # written: release them (entries added during the flush stay pending)
+                del self._records[:len(records)]
+                del self._events[:len(events)]
+            self.path = path
+            if not self._atexit_registered:
+                atexit.register(_final_flush, weakref.ref(self))
+                self._atexit_registered = True
         return path
 
     def _col_kwargs(self):
@@ -214,6 +243,7 @@ class Recorder:
         self._stop.set()
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=5.0)
+            self._thread = None
         return self.flush(path)
 
     def _autosave(self, period: float) -> None:

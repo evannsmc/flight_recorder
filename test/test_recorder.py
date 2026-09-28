@@ -9,7 +9,7 @@ import time
 import numpy as np
 import pytest
 
-from flight_recorder import FlightLog, Recorder
+from flight_recorder import ColumnBuffer, FlightLog, Recorder
 
 
 def test_round_trip(tmp_path):
@@ -147,3 +147,116 @@ def test_start_autosave_later(tmp_path):
     with FlightLog(path) as log:
         assert len(log['s']) == 51
     rec.save()
+
+
+# ------------------------------------------------------------------------------------------ fixes (v0.1.2)
+def test_append_rejects_wrong_width_instead_of_broadcasting():
+    s = ColumnBuffer(['a', 'b', 'c'])
+    with pytest.raises(ValueError):
+        s.append(7.0)                        # numpy would silently write [7, 7, 7]
+    with pytest.raises(ValueError):
+        s.append_array(np.array(7.0))
+    with pytest.raises(ValueError):
+        s.append_array([1.0, 2.0])
+    s.append_array(np.array([1.0, 2.0, 3.0]))
+    assert len(s) == 1
+
+
+@pytest.mark.parametrize('given,written', [('run.hdf5', 'run.hdf5'), ('run.H5', 'run.H5'), ('run', 'run.h5'),
+                                           ('run.csv', 'run.csv.h5'), ('d.v2/run', 'd.v2/run.h5')])
+def test_hdf5_extension_kept_otherwise_appended(tmp_path, given, written):
+    rec = Recorder()
+    rec.stream('s', ['a']).append(1.0)
+    assert rec.save(str(tmp_path / given)) == str(tmp_path / written)
+    assert (tmp_path / written).exists()
+
+
+def test_autosave_can_restart_after_save(tmp_path):
+    rec = Recorder(str(tmp_path / 'r.h5'))
+    s = rec.stream('s', ['a'])
+    s.append(1.0)
+    rec.save()
+    rec.start_autosave(0.05)                 # used to "start" a thread that exited immediately
+    for i in range(10):
+        s.append(float(i))
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        with FlightLog(rec.path) as log:
+            if len(log['s']) == 11:
+                break
+        time.sleep(0.05)
+    with FlightLog(rec.path) as log:
+        assert len(log['s']) == 11
+    rec.save()
+
+
+def test_records_and_events_released_after_flush(tmp_path):
+    rec = Recorder(str(tmp_path / 'r.h5'))
+    rec.record('plans', 1, {'tube': np.zeros((100, 10))})
+    rec.event(0.5, 'k', 'd')
+    rec.flush()
+    assert rec._records == [] and rec._events == []      # nothing kept twice in memory
+    rec.record('plans', 2, {'tube': np.ones((100, 10))})
+    rec.save()
+    with FlightLog(rec.path) as log:
+        assert log.record_keys('plans') == ['000001', '000002'] and len(log.events) == 1
+
+
+def test_failed_flush_keeps_pending_records(tmp_path, monkeypatch):
+    rec = Recorder(str(tmp_path / 'r.h5'))
+    rec.record('plans', 1, {'x': np.arange(3.0)})
+    rec.event(1.0, 'k')
+
+    def boom(*_):
+        raise OSError('disk full')
+    monkeypatch.setattr(rec, '_flush_events', boom)
+    with pytest.raises(OSError):
+        rec.flush()
+    assert len(rec._records) == 1 and len(rec._events) == 1  # not lost
+    monkeypatch.undo()
+    rec.save()
+    with FlightLog(rec.path) as log:
+        assert log.record_keys('plans') == ['000001'] and len(log.events) == 1
+
+
+def test_record_rejects_array_attribute_name_clash():
+    with pytest.raises(ValueError):
+        Recorder().record('g', 1, {'t': np.arange(3.0)}, {'t': 5.0})
+
+
+def test_reader_rejects_newer_format_version(tmp_path):
+    import h5py
+    path = Recorder().save(str(tmp_path / 'v.h5'))
+    with h5py.File(path, 'a') as f:
+        f.attrs['format_version'] = 99
+    with pytest.raises(ValueError, match='format version 99'):
+        FlightLog(path)
+
+
+def test_set_metadata_while_autosaving(tmp_path, capsys):
+    rec = Recorder(str(tmp_path / 'm.h5'), autosave_period=0.002)
+    t0 = time.time()
+    i = 0
+    while time.time() - t0 < 1.0:
+        rec.set_metadata(**{f'k{i % 200}': i})   # a flush iterates the metadata concurrently
+        i += 1
+    rec.save()
+    assert 'autosave failed' not in capsys.readouterr().out
+
+
+def test_final_flush_at_interpreter_exit(tmp_path):
+    import subprocess
+    import sys
+    path = tmp_path / 'exit.h5'
+    code = (f"from flight_recorder import Recorder\n"
+            f"rec = Recorder({str(path)!r}, autosave_period=60)\n"
+            f"s = rec.stream('s', ['a'])\n"
+            f"s.append(1.0)\n"
+            f"rec.flush()\n"
+            f"for i in range(99): s.append(float(i))\n"   # after the last flush, no save(): atexit must write them
+            f"rec.event(2.0, 'late')\n")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([os.path.dirname(os.path.dirname(__file__)),
+                                                       os.environ.get('PYTHONPATH', '')]))
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
+    with FlightLog(str(path)) as log:
+        assert len(log['s']) == 100 and list(log.events['kind']) == ['late']

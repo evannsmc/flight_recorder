@@ -135,8 +135,20 @@ library by `docs/guide/make_figures.py`.
 colcon test --packages-select flight_recorder && colcon test-result --verbose
 ```
 
-19 tests: bit-exact round trips (Python and C++ writers); incremental flushing identical to a single save;
+31 test cases: bit-exact round trips (Python and C++ writers); incremental flushing identical to a single save;
 concurrent append + flush from another thread (Python and C++); a process hard-killed after a flush keeps its
-flushed data; the hot path adds no GC-tracked objects; and the compat CSV is byte-identical to ROS2Logger's.
+flushed data; the hot path adds no GC-tracked objects; the compat CSV is byte-identical to ROS2Logger's; plus
+regressions for every 0.1.2 fix (wrong-width appends, autosave restart, memory release, failed-flush retention,
+record name clashes, format-version check, extension policy, final flush at exit, and C++ edge cases).
+
+## Changes in 0.1.2
+
+* `append` / `append_array` reject a wrong number of values (a single value used to be broadcast silently).
+* `start_autosave` works again after `save()`; a recorder that has written its file gets a final flush at exit.
+* Records and events are released from memory once flushed (Python and C++); a failed flush keeps them.
+* `set_metadata` is synchronised with flushing; the reader rejects files from a newer format version.
+* HDF5 extensions (`.h5`, `.hdf5`, `.hdf`, `.he5`) are kept, anything else gets `.h5` appended (was: replaced).
+* C++: HDF5 error printing is restored after each flush; `~Recorder()` flushes; scalar `Array`s;
+  `Array` size/shape mismatch throws instead of reading out of bounds; array/attribute name clashes are rejected.
 
 MIT license.

@@ -1,5 +1,5 @@
 ```text
-/    @ controller='twinflight', created='2026-09-28T13:47:00', format='flight_recorder'
+/    @ controller='twinflight', created='2026-09-28T17:23:30', format='flight_recorder'
      @ format_version=1
      @ gains=[6.0, 4.5, 1.0]
      @ host='example-host'

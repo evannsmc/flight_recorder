@@ -7,18 +7,21 @@
 //   rec.record("plans", 12, {{"tube", fr::Array(tube_data, {rows, 10})}}, {{"t_start", 3.2}});
 //   rec.event(t, "backup", "no certified plan");
 //   rec.flush();                                                   // optional, e.g. from a low-priority timer
-//   rec.save();                                                    // final flush
+//   rec.save();                                                    // final flush (the destructor also flushes)
 //
 // Threading: each Stream has ONE writer thread; flush()/save() may run on another thread concurrently. Rows live in
 // fixed-size blocks that are never moved or freed while the recorder exists, and the row count is published with
 // release/acquire ordering, so a concurrent flush only ever reads complete rows. record()/event() take a mutex.
+// Records and events are moved out when flushed and released once written (nothing is kept twice in memory).
 #pragma once
 
 #include <hdf5.h>
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -44,17 +47,25 @@ constexpr unsigned kGzipLevel = 4;
 using Value = std::variant<double, int64_t, std::string, std::vector<double>>;
 using Attributes = std::vector<std::pair<std::string, Value>>;
 
-// An N-d float64 array to store as a record (row-major); owns a copy of the data
+// An N-d float64 array to store as a record (row-major); owns a copy of the data. An empty shape is a scalar.
 struct Array {
   std::vector<double> data;
   std::vector<hsize_t> shape;
   Array() = default;
   Array(const double* values, std::vector<hsize_t> dims) : shape(std::move(dims)) {
-    hsize_t n = 1;
-    for (hsize_t d : shape) n *= d;
-    data.assign(values, values + n);
+    data.assign(values, values + count(shape));
   }
-  Array(std::vector<double> values, std::vector<hsize_t> dims) : data(std::move(values)), shape(std::move(dims)) {}
+  Array(std::vector<double> values, std::vector<hsize_t> dims) : data(std::move(values)), shape(std::move(dims)) {
+    // a mismatch would make H5Dwrite read past the end of `data`
+    if (data.size() != count(shape))
+      throw std::invalid_argument("flight_recorder: Array has " + std::to_string(data.size()) +
+                                  " values but its shape needs " + std::to_string(count(shape)));
+  }
+  static hsize_t count(const std::vector<hsize_t>& dims) {
+    hsize_t n = 1;
+    for (hsize_t d : dims) n *= d;
+    return n;
+  }
 };
 
 namespace detail {
@@ -168,6 +179,35 @@ inline void append_1d(hid_t loc, const std::string& name, hid_t type, hsize_t ch
   check(H5Dwrite(ds, type, mem_space, file_space, H5P_DEFAULT, data), "H5Dwrite");
 }
 
+// Keep a path that already has an HDF5 extension; otherwise append ".h5" (same rule as the Python writer)
+inline std::string h5_path(const std::string& path) {
+  const auto slash = path.find_last_of('/');
+  const auto dot = path.find_last_of('.');
+  std::string ext;
+  if (dot != std::string::npos && (slash == std::string::npos || dot > slash)) ext = path.substr(dot);
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+  for (const char* e : {".h5", ".hdf5", ".hdf", ".he5"})
+    if (ext == e) return path;
+  return path + ".h5";
+}
+
+// Silences HDF5's automatic error printing while alive (errors surface as exceptions) and restores the
+// previous handler afterwards, so the rest of the process keeps its own HDF5 error reporting.
+class QuietHdf5Errors {
+ public:
+  QuietHdf5Errors() {
+    H5Eget_auto2(H5E_DEFAULT, &func_, &data_);
+    H5Eset_auto2(H5E_DEFAULT, nullptr, nullptr);
+  }
+  ~QuietHdf5Errors() { H5Eset_auto2(H5E_DEFAULT, func_, data_); }
+  QuietHdf5Errors(const QuietHdf5Errors&) = delete;
+  QuietHdf5Errors& operator=(const QuietHdf5Errors&) = delete;
+
+ private:
+  H5E_auto2_t func_{nullptr};
+  void* data_{nullptr};
+};
+
 inline std::string iso_now() {
   const std::time_t t = std::time(nullptr);
   char buf[32];
@@ -243,7 +283,8 @@ class Stream {
 
 class Recorder {
  public:
-  explicit Recorder(std::string path = "", const Attributes& metadata = {}) : path_(std::move(path)) {
+  explicit Recorder(std::string path = "", const Attributes& metadata = {})
+      : path_(path.empty() ? std::string() : detail::h5_path(path)) {
     set_metadata("format", std::string(kFormatName));
     set_metadata("format_version", kFormatVersion);
     set_metadata("writer", std::string("cpp"));
@@ -251,6 +292,18 @@ class Recorder {
     set_metadata("host", detail::hostname());
     for (const auto& [k, v] : metadata) set_metadata(k, v);
   }
+
+  // Final flush if a path is set, so data is not lost when save() is forgotten. Never throws.
+  ~Recorder() {
+    if (path_.empty()) return;
+    try {
+      flush();
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "[flight_recorder] final flush in ~Recorder failed: %s\n", e.what());
+    }
+  }
+  Recorder(const Recorder&) = delete;
+  Recorder& operator=(const Recorder&) = delete;
 
   // Declare a stream at init and keep the reference (it stays valid for the recorder's lifetime).
   Stream& stream(const std::string& name, const std::vector<std::string>& columns, size_t capacity = 4096) {
@@ -262,8 +315,13 @@ class Recorder {
   }
 
   // Store rarely-changing arrays ONCE under records/<group>/<key> (integer keys are zero-padded to 6 digits).
+  // Array names and attribute names share one namespace (both become members of the same HDF5 group).
   void record(const std::string& group, const std::string& key, std::map<std::string, Array> arrays,
               const Attributes& attrs = {}) {
+    for (const auto& [k, v] : attrs)
+      if (arrays.count(k))
+        throw std::invalid_argument("flight_recorder: record " + group + "/" + key + ": '" + k +
+                                    "' used both as array and attribute name");
     std::lock_guard<std::mutex> lock(mutex_);
     records_.push_back({group, key, std::move(arrays), attrs});
   }
@@ -292,25 +350,52 @@ class Recorder {
   std::string flush(const std::string& path = "") {
     std::lock_guard<std::mutex> flush_lock(flush_mutex_);
     if (!path.empty()) {
+      const std::string p = detail::h5_path(path);
       // later flushes only append the NEW rows at their offsets; a different file would miss the earlier ones
-      if (created_ && path != path_) throw std::invalid_argument("flight_recorder: already writing " + path_);
-      path_ = path;
+      if (created_ && p != path_) throw std::invalid_argument("flight_recorder: already writing " + path_);
+      path_ = p;
     }
     if (path_.empty()) throw std::invalid_argument("flight_recorder: no path given");
 
     std::vector<Stream*> streams;
-    std::vector<RecordEntry> records;
+    std::vector<RecordEntry> records;  // moved out of the recorder: released once written
     std::vector<EventEntry> events;
     Attributes metadata;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       for (auto& s : streams_) streams.push_back(s.get());
-      records.assign(records_.begin() + static_cast<long>(records_flushed_), records_.end());
-      events.assign(events_.begin() + static_cast<long>(events_flushed_), events_.end());
+      records.swap(records_);
+      events.swap(events_);
       metadata = metadata_;
     }
+    try {
+      write(streams, records, events, metadata);
+    } catch (...) {
+      // put the unwritten records/events back in front of anything added meanwhile, then rethrow
+      std::lock_guard<std::mutex> lock(mutex_);
+      records_.insert(records_.begin(), std::make_move_iterator(records.begin()), std::make_move_iterator(records.end()));
+      events_.insert(events_.begin(), std::make_move_iterator(events.begin()), std::make_move_iterator(events.end()));
+      throw;
+    }
+    return path_;
+  }
 
-    H5Eset_auto2(H5E_DEFAULT, nullptr, nullptr);  // errors are reported through exceptions
+  std::string save(const std::string& path = "") { return flush(path); }
+
+ private:
+  struct RecordEntry {
+    std::string group, key;
+    std::map<std::string, Array> arrays;
+    Attributes attrs;
+  };
+  struct EventEntry {
+    double t;
+    std::string kind, detail;
+  };
+
+  void write(const std::vector<Stream*>& streams, const std::vector<RecordEntry>& records,
+             const std::vector<EventEntry>& events, const Attributes& metadata) {
+    detail::QuietHdf5Errors quiet;  // errors are reported through exceptions; restored on return/throw
     detail::Id file = created_ ? detail::Id(detail::check_id(H5Fopen(path_.c_str(), H5F_ACC_RDWR, H5P_DEFAULT), "H5Fopen"), H5Fclose)
                                : detail::Id(detail::check_id(H5Fcreate(path_.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT), "H5Fcreate"), H5Fclose);
     created_ = true;
@@ -359,32 +444,13 @@ class Recorder {
       detail::append_1d(events_group, "kind", str, 256, false, n0, count, kinds.data());
       detail::append_1d(events_group, "detail", str, 256, false, n0, count, details.data());
     }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      records_flushed_ += records.size();
-      events_flushed_ += events.size();
-    }
-    return path_;
   }
-
-  std::string save(const std::string& path = "") { return flush(path); }
-
- private:
-  struct RecordEntry {
-    std::string group, key;
-    std::map<std::string, Array> arrays;
-    Attributes attrs;
-  };
-  struct EventEntry {
-    double t;
-    std::string kind, detail;
-  };
 
   static void write_array(hid_t loc, const std::string& name, const Array& arr) {
     const int rank = static_cast<int>(arr.shape.size());
-    detail::Id space(H5Screate_simple(rank, arr.shape.data(), nullptr), H5Sclose);
+    detail::Id space(rank == 0 ? H5Screate(H5S_SCALAR) : H5Screate_simple(rank, arr.shape.data(), nullptr), H5Sclose);
     detail::Id dcpl(H5Pcreate(H5P_DATASET_CREATE), H5Pclose);
-    if (arr.data.size() > 256) {
+    if (rank > 0 && arr.data.size() > 256) {
       detail::check(H5Pset_chunk(dcpl, rank, arr.shape.data()), "H5Pset_chunk");
       detail::check(H5Pset_shuffle(dcpl), "H5Pset_shuffle");
       detail::check(H5Pset_deflate(dcpl, kGzipLevel), "H5Pset_deflate");
@@ -399,8 +465,7 @@ class Recorder {
   Attributes metadata_;
   std::vector<std::unique_ptr<Stream>> streams_;
   std::vector<RecordEntry> records_;
-  std::vector<EventEntry> events_;
-  size_t records_flushed_{0}, events_flushed_{0};
+  std::vector<EventEntry> events_;  // pending (not yet flushed)
 };
 
 }  // namespace fr

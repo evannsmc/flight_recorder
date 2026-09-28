@@ -25,5 +25,14 @@ STREAMS = 'streams'
 RECORDS = 'records'
 EVENTS = 'events'
 
+HDF5_EXTENSIONS = ('.h5', '.hdf5', '.hdf', '.he5')
+
+
+def h5_path(path: str) -> str:
+    """Keep a path that already has an HDF5 extension; otherwise append '.h5' (never drop part of the name)."""
+    import os
+    return path if os.path.splitext(path)[1].lower() in HDF5_EXTENSIONS else path + '.h5'
+
+
 CHUNK_ROWS = 4096          # rows per HDF5 chunk for stream columns (32 KiB of float64)
 GZIP_LEVEL = 4             # 1 = fastest, 9 = smallest; 4 is a good trade-off for sensor data

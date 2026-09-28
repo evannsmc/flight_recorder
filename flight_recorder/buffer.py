@@ -23,7 +23,8 @@ class ColumnBuffer:
         if len(set(self.columns)) != len(self.columns):
             raise ValueError(f'duplicate column names: {self.columns}')
         self._index: Dict[str, int] = {c: i for i, c in enumerate(self.columns)}
-        self._data = np.full((max(int(capacity), 1), len(self.columns)), np.nan)
+        self._width = len(self.columns)
+        self._data = np.full((max(int(capacity), 1), self._width), np.nan)
         self._n = 0
 
     def __len__(self) -> int:
@@ -40,6 +41,8 @@ class ColumnBuffer:
 
     def append(self, *values: float) -> None:
         """Hot path: ``buf.append(t, x, y, z)``. Values must match the columns, in order."""
+        if len(values) != self._width:  # numpy would silently broadcast a single value over every column
+            raise ValueError(f'expected {self._width} values ({", ".join(self.columns)}), got {len(values)}')
         if self._n == self._data.shape[0]:
             self._grow()
         self._data[self._n] = values
@@ -47,6 +50,8 @@ class ColumnBuffer:
 
     def append_array(self, row) -> None:
         """Hot path for values that are already in an array (no argument unpacking)."""
+        if np.size(row) != self._width:  # a scalar or short row would otherwise be broadcast silently
+            raise ValueError(f'expected {self._width} values ({", ".join(self.columns)}), got {np.size(row)}')
         if self._n == self._data.shape[0]:
             self._grow()
         self._data[self._n, :] = row

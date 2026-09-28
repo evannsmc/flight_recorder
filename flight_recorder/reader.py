@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, List
 
 import numpy as np
@@ -37,7 +38,13 @@ class FlightLog:
         self._f = h5py.File(path, 'r')
         self.metadata: Dict[str, Any] = {k: _py(v) for k, v in self._f.attrs.items()}
         if self.metadata.get('format') != fmt.FORMAT_NAME:
+            self._f.close()
             raise ValueError(f'{path} is not a flight_recorder file (format={self.metadata.get("format")!r})')
+        version = self.metadata.get('format_version')
+        if not isinstance(version, int) or version > fmt.FORMAT_VERSION:
+            self._f.close()
+            raise ValueError(f'{path} was written in flight_recorder format version {version!r}; this reader supports '
+                             f'versions up to {fmt.FORMAT_VERSION}. Upgrade flight_recorder to read it.')
 
     # ------------------------------------------------------------------ streams
     @property
@@ -67,10 +74,20 @@ class FlightLog:
         return sorted(self._f[fmt.RECORDS][group].keys())
 
     def record(self, group: str, key: Any) -> Dict[str, Any]:
+        """Arrays and attributes of one record in a single dict (writers reject clashing names)."""
         r = self._f[fmt.RECORDS][group][record_key(key)]
         out: Dict[str, Any] = {name: r[name][()] for name in r.keys()}
-        out.update({k: _py(v) for k, v in r.attrs.items()})
+        for k, v in r.attrs.items():
+            if k in out:  # only possible in files written before writers rejected clashes: keep both
+                warnings.warn(f'record {group}/{key}: attribute {k!r} clashes with an array; see record_attrs()')
+                continue
+            out[k] = _py(v)
         return out
+
+    def record_attrs(self, group: str, key: Any) -> Dict[str, Any]:
+        """Only the attributes of one record."""
+        r = self._f[fmt.RECORDS][group][record_key(key)]
+        return {k: _py(v) for k, v in r.attrs.items()}
 
     # ------------------------------------------------------------------ events
     @property

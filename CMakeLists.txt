@@ -35,6 +35,9 @@ target_compile_options(cpp_example PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(cpp_bench benchmarks/cpp_bench.cpp)
 target_link_libraries(cpp_bench flight_recorder)
 install(TARGETS cpp_example cpp_bench DESTINATION lib/${PROJECT_NAME})
+add_executable(cpp_edge_cases test/cpp_edge_cases.cpp)
+target_link_libraries(cpp_edge_cases flight_recorder)
+target_compile_options(cpp_edge_cases PRIVATE -Wall -Wextra -Wpedantic)
 
 # ---- Python -------------------------------------------------------------------------------------------------------
 ament_python_install_package(${PROJECT_NAME})
@@ -43,9 +46,9 @@ install(PROGRAMS scripts/flight_recorder DESTINATION lib/${PROJECT_NAME})
 # ---- tests --------------------------------------------------------------------------------------------------------
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(t test_recorder test_compat test_cpp_roundtrip test_gc)
+  foreach(t test_recorder test_compat test_cpp_roundtrip test_cpp_edge_cases test_gc)
     ament_add_pytest_test(${t} test/${t}.py
-      ENV CPP_EXAMPLE=${CMAKE_CURRENT_BINARY_DIR}/cpp_example
+      ENV CPP_EXAMPLE=${CMAKE_CURRENT_BINARY_DIR}/cpp_example CPP_EDGE_CASES=${CMAKE_CURRENT_BINARY_DIR}/cpp_edge_cases
       APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
       TIMEOUT 300)
   endforeach()
