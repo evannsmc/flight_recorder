@@ -117,6 +117,11 @@ See [docs/MIGRATION.md](docs/MIGRATION.md) for moving to the native API, which i
 
 ## Documentation
 
+**Full guide (PDF, 24 pages): [docs/guide/flight_recorder_guide.pdf](docs/guide/flight_recorder_guide.pdf)**. It covers design,
+file format, memory/threading model, crash tolerance, the complete Python and C++ APIs, ROS 2 usage, benchmarks,
+tests and limitations. Its source is `docs/guide/flight_recorder_guide.qmd`, with figures regenerated from the real
+library by `docs/guide/make_figures.py`.
+
 * [docs/DESIGN.md](docs/DESIGN.md): how it works (file format, memory model, threading, incremental flushing,
   the C++ writer, limitations)
 * [docs/COMPARISON.md](docs/COMPARISON.md): ROS2Logger, CSV, pandas, NumPy, pickle, rosbag2/MCAP, Parquet,

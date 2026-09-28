@@ -6,3 +6,8 @@ __pycache__/
 *.h5
 *.egg-info/
 .pytest_cache/
+# Quarto intermediates (the .qmd, make_figures.py, figures/ and the rendered PDF are tracked)
+.quarto/
+docs/guide/*_files/
+docs/guide/*.tex
+docs/guide/*.log
